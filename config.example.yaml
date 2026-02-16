@@ -1,0 +1,28 @@
+# Sharp Printer Automation Configuration
+# Copy this file to config.yaml and customize with your settings
+
+# Target printer/emulator
+target:
+  url: "http://localhost:5173" # docker testing, update to real IP for printer
+  #url: "http://192.168.1.100" # Real IP example
+  password: "admin"
+
+# SMTP Configuration to apply
+smtp:
+  gateway: "smtp.gmail.com"
+  port: 587
+  reply_address: "printer@example.com"
+  use_ssl: "negotiate"
+  auth_method: "login-plain"
+  
+# Device credentials for SMTP authentication
+credentials:
+  userid: "printer@example.com"
+  password: "your-app-password-here"
+
+# Script settings
+settings:
+  headless: false  # Set to true to run browser in background
+  screenshot_on_success: true
+  screenshot_on_failure: true
+  wait_timeout: 10  # seconds
