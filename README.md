@@ -1,325 +1,219 @@
 # Sharp Printer SMTP Configuration Automation
 
-Python-based automation tool for configuring Sharp MX-B468F network printers using Selenium WebDriver. Designed to safely test printer provisioning scripts against an emulator before deploying to production hardware.
+A Python automation script that configures Sharp MX-B468F network printers by driving their web management interface with Selenium WebDriver — the same clicks a technician would make, executed programmatically and documented with screenshots at every step.
 
-## Problem Statement
+## Why This Exists
 
-**Challenge:** IT teams need to configure SMTP settings on dozens of Sharp network printers, but:
-- Manual configuration is time-consuming and error-prone
-- Testing on production printers risks disrupting operations
-- No sandbox environment exists for validating provisioning scripts
+Configuring SMTP settings on a fleet of Sharp printers is a manual, repetitive, error-prone process. A technician navigates to each printer's web interface, logs in, fills out the same form fields, tests the connection, and submits — then repeats that for every device. At scale, that's not a workflow, it's a liability. One wrong field and scan-to-email breaks for an entire building.
 
-**Solution:** This automation script, combined with the Sharp printer emulator, provides:
-- Safe testing in a sandboxed environment
-- Automated configuration deployment
-- Screenshot-based verification
-- Support for both development (emulator) and production (real printers) workflows
+This script eliminates the manual process. Configuration lives in a version-controlled YAML file. The script handles the rest — login, form population, connection testing, submission, and screenshot documentation. The same config runs against the [Sharp Printer Emulator](https://github.com/justinreed270/sharp-printer-emulator) for safe validation before it ever touches a production device.
 
-## Features
+## Architecture Decision — Why Selenium
 
-- **Automated Web Interface Interaction**: Uses Selenium to replicate manual configuration steps
-- **YAML-based Configuration**: Easy-to-modify settings stored in version-controlled format
-- **Dual-mode Operation**: Supports both emulator testing and real printer deployment
-- **Screenshot Documentation**: Captures evidence of each configuration step
-- **Error Handling**: Graceful failure with detailed logging
-- **Command-line Flexibility**: Multiple modes for different use cases
+The Sharp printer web interface has no API. There's no REST endpoint to POST configuration to, no CLI, no remote management protocol beyond the web UI. Selenium is the right tool here because it replicates exactly what a human technician does — navigate, click, type, submit — which means the script works against both the emulator and real hardware without modification.
 
-## Architecture
+**Why not use requests or BeautifulSoup?**
 
-### Technology Stack
-- **Language**: Python 3.11+
-- **Web Automation**: Selenium WebDriver with Chrome
-- **Configuration**: YAML (human-readable, supports comments)
-- **Dependencies**: Minimal (selenium, pyyaml, requests)
+Those tools parse HTML and submit forms directly, bypassing JavaScript rendering. The Sharp web interface relies on JavaScript for form validation and state management. A raw HTTP approach would either fail silently or produce unpredictable results. Selenium drives a real browser, so what you see in the script is what actually happens on screen.
 
-### Workflow
+## How It Works
+
 ```
-1. Load config.yaml → Parse SMTP settings
-2. Initialize WebDriver → Launch Chrome browser
-3. Navigate to printer → Login with credentials
-4. Fill SMTP form → Populate all required fields
-5. Test connection (optional) → Validate settings work
-6. Submit configuration → Apply changes
-7. Screenshot & log → Document the process
+config.yaml → Load settings
+     ↓
+Chrome WebDriver → Launch browser
+     ↓
+Navigate to printer URL → Login
+     ↓
+Populate SMTP form fields
+     ↓
+Test connection (optional) → Real SMTP auth attempt
+     ↓
+Submit if test passes
+     ↓
+Screenshot each step → Audit trail
 ```
+
+**The test-before-submit pattern is intentional.** The script won't submit a configuration that fails its own connection test. This prevents a bad config from being applied to a printer that was previously working — a safeguard that manual configuration doesn't have.
+
+## Operating Modes
+
+Three modes to handle the difference between emulator and production environments:
+
+| Mode | Command | Use Case |
+|------|---------|----------|
+| Normal | `python scripts/configure_printer.py` | Emulator — test then submit if test passes |
+| Test Only | `--test-only` | Validate config without making any changes |
+| Skip Test | `--skip-test` | Real printers — submit directly (no test button on hardware) |
+
+**Why does skip-test exist?**
+
+Real Sharp printers don't have a "Test Connection" button in their web interface — that's a feature of the emulator. When deploying to production hardware, you skip the automated test and verify manually by sending a test scan after configuration. The flag makes this workflow explicit rather than hiding it.
+
+## Security Design
+
+**Credentials are never in the code.** All sensitive values live in `config.yaml`, which is excluded from version control via `.gitignore`. The repo only contains `config.example.yaml` — a template with placeholder values and no real credentials. This is the correct pattern for any automation tool that handles authentication.
+
+**The `.gitignore` is intentional and important:**
+```
+config.yaml        # Your real credentials — never committed
+screenshots/*      # May contain sensitive UI state
+.env               # Environment files
+```
+
+**Production credential handling.** For production deployments, `config.yaml` credentials should be sourced from a secrets manager or environment variables rather than a static file. The YAML approach is appropriate for development and sandboxed testing — not for a CI/CD pipeline running against live infrastructure.
+
+**Screenshot audit trail.** Every major step produces a timestamped screenshot. This serves two purposes: troubleshooting failures, and creating an evidence trail that configuration was applied correctly. In enterprise IT, documentation isn't optional.
 
 ## Installation
 
 ### Prerequisites
-- Python 3.11 or higher
-- Google Chrome browser
-- ChromeDriver (matching your Chrome version)
+- Python 3.11+
+- Google Chrome
+- ChromeDriver (must match your Chrome version)
 
 ### Setup
 ```bash
-# Clone the repository
 git clone https://github.com/justinreed270/sharp-automation.git
 cd sharp-automation
 
-# Create virtual environment
+# Create and activate virtual environment
 python -m venv .venv
 
-# Activate virtual environment
-# Windows PowerShell:
+# Windows PowerShell
 .venv\Scripts\Activate.ps1
-# Git Bash:
-source .venv/Scripts/activate
+
+# Git Bash / Mac / Linux
+source .venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Create your configuration file
+# Configure
 cp config.example.yaml config.yaml
-
 # Edit config.yaml with your settings
-# (Use your favorite text editor)
 ```
+
+### Why a Virtual Environment
+
+Dependencies are pinned to specific versions in `requirements.txt`. A virtual environment ensures those exact versions are installed without conflicting with other Python projects on the same machine. It also makes the project portable — anyone who clones the repo gets the same environment.
 
 ## Configuration
 
-### config.yaml Structure
 ```yaml
-# Target printer/emulator settings
+# Target — emulator or real printer IP
 target:
-  url: "http://localhost:5173"  # Emulator or printer IP
-  username: "admin"              # Web interface login
-  password: "admin"              # Web interface password
+  url: "http://localhost:5173"   # Emulator
+  # url: "http://192.168.1.100" # Real printer
+  username: "admin"
+  password: "admin"
 
-# SMTP settings to configure
+# SMTP settings to apply
 smtp:
-  gateway: "smtp.gmail.com"      # SMTP server address
-  port: 587                       # SMTP port (25, 465, 587, 2525)
+  gateway: "smtp.gmail.com"
+  port: 587
   reply_address: "printer@example.com"
-  use_ssl: "negotiate"            # none, negotiate, ssl, tls
-  auth_method: "login-plain"      # none, login-plain, cram-md5
+  use_ssl: "negotiate"           # none, negotiate, ssl, tls
+  auth_method: "login-plain"     # none, login-plain, cram-md5
 
-# Device credentials for SMTP authentication
+# Credentials for SMTP authentication
 credentials:
   userid: "printer@example.com"
-  password: "your-app-password"   # Use app-specific passwords
+  password: "your-app-password"  # Use app-specific passwords, not account passwords
 
-# Script behavior settings
+# Script behavior
 settings:
-  headless: false                 # true = run browser in background
+  headless: false                # true = run without visible browser window
   screenshot_on_success: true
   screenshot_on_failure: true
-  wait_timeout: 10                # seconds to wait for elements
+  wait_timeout: 10               # seconds to wait for page elements
 ```
-
-### Security Considerations
-
-**CRITICAL:** Never commit `config.yaml` to version control!
-
-The `.gitignore` file already excludes it. Only `config.example.yaml` (template with no real credentials) should be committed.
-
-**Best Practices:**
-- Use app-specific passwords (not your main email password)
-- Store production credentials in environment variables or secrets manager
-- Restrict file permissions on `config.yaml` (`chmod 600` on Linux/Mac)
-- Use separate test accounts for development
 
 ## Usage
 
-### Basic Usage (Test Against Emulator)
 ```bash
 # Activate virtual environment first
 .venv\Scripts\Activate.ps1
 
-# Run with default settings (uses config.yaml)
+# Standard run — test then submit
 python scripts/configure_printer.py
-```
 
-This will:
-1. Log in to the printer/emulator
-2. Fill in SMTP configuration
-3. Test the connection (validates credentials)
-4. Submit the configuration if test passes
-
-### Advanced Usage
-
-**Test Mode (Don't Submit):**
-```bash
+# Test only — no changes made
 python scripts/configure_printer.py --test-only
-```
-Use this to verify configuration without making changes.
 
-**Production Mode (Skip Test):**
-```bash
+# Production mode — skip test, submit directly
 python scripts/configure_printer.py --skip-test
-```
-Use this for real Sharp printers that don't have a test button.
 
-**Custom Config File:**
-```bash
+# Custom config file
 python scripts/configure_printer.py --config production-config.yaml
 ```
 
-**Headless Mode:**
-Edit `config.yaml` and set `headless: true` to run without visible browser.
-
-## Project Structure
-```
-sharp-automation/
-├── .venv/                       # Virtual environment (gitignored)
-├── screenshots/                 # Auto-generated screenshots (gitignored)
-│   ├── 01_logged_in_*.png
-│   ├── 02_config_filled_*.png
-│   ├── 03_test_success_*.png
-│   └── 04_submitted_*.png
-├── scripts/
-│   └── configure_printer.py     # Main automation script
-├── config.example.yaml          # Template configuration (safe to commit)
-├── config.yaml                  # Your configuration (gitignored)
-├── requirements.txt             # Python dependencies
-├── .gitignore                   # Protects secrets
-└── README.md                    # This file
-```
-
-## How It Works (Technical Deep Dive)
-
-### 1. Configuration Loading
-```python
-def _load_config(self, config_path):
-    with open(config_path, 'r') as f:
-        return yaml.safe_load(f)
-```
-- Reads YAML file
-- Validates structure
-- Fails fast if config missing
-
-### 2. WebDriver Initialization
-```python
-options = webdriver.ChromeOptions()
-options.add_argument('--no-sandbox')
-options.add_argument('--disable-dev-shm-usage')
-self.driver = webdriver.Chrome(options=options)
-```
-- Configures Chrome for automation
-- Sets window size for consistent screenshots
-- Handles headless mode if configured
-
-### 3. Element Selection Strategy
-The script uses multiple CSS selector strategies for robustness:
-- **Placeholder text**: `input[placeholder='smtp.gmail.com']`
-- **Input types**: `input[type='text']`, `input[type='password']`
-- **Button text matching**: Searches for buttons containing "submit" or "test"
-
-This approach handles minor UI variations between printer models.
-
-### 4. Password Field Detection
-```python
-all_password_fields = self.driver.find_elements(...)
-if len(all_password_fields) >= 2:
-    password_field = all_password_fields[-1]  # Use last field
-elif len(all_password_fields) == 1:
-    password_field = all_password_fields[0]   # Use only field
-```
-**Why this logic?**
-- After login, the login password field disappears
-- The device password field is what remains
-- Script handles both 1 and 2+ password field scenarios
-
-### 5. Screenshot Documentation
-```python
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-filename = f"{name}_{timestamp}.png"
-self.driver.save_screenshot(filename)
-```
-Every major step is documented with timestamped screenshots for:
-- Troubleshooting failures
-- Audit trails
-- Demonstrating successful execution
-
-## Troubleshooting
-
-### Common Issues
-
-**"ChromeDriver not found"**
-- Install ChromeDriver: https://chromedriver.chromium.org/
-- Ensure it matches your Chrome version
-- Add to system PATH or place in project directory
-
-**"Element not found"**
-- Increase `wait_timeout` in config.yaml
-- Check if printer UI differs from expected
-- Review screenshots to see what browser sees
-
-**"Login failed"**
-- Verify URL is correct (emulator: localhost:5173, printer: IP address)
-- Check username/password in config.yaml
-- Ensure printer web interface is accessible
-
-**"Test connection failed"**
-- Verify SMTP credentials are correct
-- For Gmail, use app-specific password (not your account password)
-- Check firewall isn't blocking SMTP ports
-
 ## Development Workflow
 
-### Testing Against Emulator
 ```bash
-# Terminal 1: Start the emulator
-cd path/to/sharp-emulator
+# Terminal 1 — start the emulator
+cd path/to/sharp-printer-emulator
 docker-compose up
 
-# Terminal 2: Run automation
+# Terminal 2 — run automation against it
 cd path/to/sharp-automation
 .venv\Scripts\Activate.ps1
 python scripts/configure_printer.py
 ```
 
-### Deploying to Real Printers
-
-1. Update `config.yaml` with printer's IP address
-2. Use `--skip-test` flag (real printers lack test button)
-3. Verify with actual test scan after configuration
-```bash
-python scripts/configure_printer.py --skip-test
+Screenshots land in `screenshots/` with timestamps:
+```
+screenshots/
+├── 01_logged_in_20260220_143022.png
+├── 02_config_filled_20260220_143031.png
+├── 03_test_success_20260220_143045.png
+└── 04_submitted_20260220_143047.png
 ```
 
-## Use Cases
+## Project Structure
 
-### IT Operations
-- Bulk configuration of new printer deployments
-- Standardizing SMTP settings across fleet
-- Migrating printers to new email servers
+```
+sharp-automation/
+├── .venv/                    # Virtual environment (gitignored)
+├── screenshots/              # Auto-generated audit trail (gitignored)
+├── scripts/
+│   └── configure_printer.py # Main automation script
+├── config.example.yaml       # Template — safe to commit
+├── config.yaml               # Your config — never committed
+├── requirements.txt          # Pinned dependencies
+├── .gitignore                # Protects credentials
+└── README.md
+```
 
-### Testing & QA
-- Validating configuration scripts before production
-- Regression testing after firmware updates
-- Training new IT staff on printer configuration
+## Troubleshooting
 
-### DevOps Integration
-- CI/CD pipelines for infrastructure as code
-- Automated provisioning in cloud environments
-- Configuration management alongside tools like Ansible
+**"ChromeDriver not found"** — ChromeDriver version must match your installed Chrome version exactly. Download from https://chromedriver.chromium.org and add to your system PATH.
 
-## Future Enhancements
+**"Element not found"** — Increase `wait_timeout` in config.yaml. Review the error screenshots to see what the browser was seeing at the point of failure.
 
-Potential improvements for future versions:
-- [ ] Support for additional printer models (Canon, HP, Ricoh)
-- [ ] REST API wrapper for remote execution
-- [ ] Bulk configuration from CSV file
-- [ ] Integration with configuration management tools
-- [ ] Slack/email notifications on completion
-- [ ] Network discovery and automatic printer detection
+**"Login failed"** — Verify the URL in config.yaml. Emulator runs at `localhost:5173`. Real printers use their IP address. Confirm credentials match the target.
 
-## Contributing
+**"Test connection failed"** — For Gmail, use an app-specific password, not your account password. Verify the SMTP gateway and port are correct for your mail provider.
 
-This project is currently a personal portfolio piece. If you find it useful and want to extend it, feel free to fork and modify.
+## Companion Project
+
+This script is designed to run against the [Sharp Printer Emulator](https://github.com/justinreed270/sharp-printer-emulator) — a Dockerized full-stack application that replicates the Sharp web interface and performs real SMTP validation against live mail servers.
+
+The two projects together demonstrate a complete provisioning pipeline:
+
+```
+Automation Script → Emulator (safe validation) → Production Printer
+```
+
+## Tech Stack
+
+| Component | Technology | Why |
+|-----------|------------|-----|
+| Automation | Python + Selenium WebDriver | Only viable option for a JavaScript-rendered web interface with no API |
+| Browser | Google Chrome (headless capable) | Most compatible with Sharp printer web interface rendering |
+| Configuration | YAML | Human-readable, supports comments, version-control friendly |
+| Dependencies | Virtual environment + pinned requirements.txt | Reproducible installs, no dependency conflicts |
 
 ## License
 
-MIT License - See LICENSE file for details
-
-## Author
-
-Built to demonstrate:
-- Python automation capabilities
-- Security-conscious development practices
-- Infrastructure as Code principles
-- Professional software engineering workflows
-
-## Related Projects
-
-This automation tool is designed to work with the [Sharp Printer Emulator](https://github.com/justinreed270/sharp-printer-emulator) for safe testing before production deployment.
+MIT
